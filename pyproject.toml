@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "picfind"
+version = "0.1.0"
+description = "Local image indexing and semantic search with CLIP and BLIP."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "Pillow>=10.0",
+    "pillow-heif>=0.16.0",
+    "streamlit>=1.44",
+    "torch>=2.6",
+    "tqdm>=4.66",
+    "transformers>=4.40",
+]
+
+[project.scripts]
+picfind = "picfind.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
