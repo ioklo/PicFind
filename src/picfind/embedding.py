@@ -5,15 +5,18 @@ from typing import Any
 
 import numpy as np
 import torch
+import transformers
 from PIL import Image
-from transformers import BlipForConditionalGeneration, BlipProcessor, CLIPModel, CLIPProcessor
+from transformers import AutoModelForCausalLM, AutoProcessor, CLIPModel, CLIPProcessor
 
 
 class ModelBundle:
-    def __init__(self, clip_model_name: str, caption_model_name: str) -> None:
+    def __init__(self, clip_model_name: str, caption_model_name: str, caption_prompt: str) -> None:
         self.clip_model_name = clip_model_name
         self.caption_model_name = caption_model_name
+        self.caption_prompt = caption_prompt
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.torch_dtype = torch.float16 if self.device == "cuda" else torch.float32
 
     @cached_property
     def clip_processor(self) -> CLIPProcessor:
@@ -27,12 +30,14 @@ class ModelBundle:
         return model
 
     @cached_property
-    def caption_processor(self) -> BlipProcessor:
-        return BlipProcessor.from_pretrained(self.caption_model_name, use_fast=False)
+    def caption_processor(self) -> Any:
+        _ensure_supported_transformers_version_for_florence()
+        return AutoProcessor.from_pretrained(self.caption_model_name, trust_remote_code=True)
 
     @cached_property
-    def caption_model(self) -> BlipForConditionalGeneration:
-        model = _load_model(BlipForConditionalGeneration, self.caption_model_name)
+    def caption_model(self) -> Any:
+        _ensure_supported_transformers_version_for_florence()
+        model = _load_florence_model(self.caption_model_name, self.torch_dtype)
         model.to(self.device)
         model.eval()
         return model
@@ -52,11 +57,31 @@ class ModelBundle:
         return _normalize(features)
 
     def generate_caption(self, image: Image.Image) -> str:
-        inputs = self.caption_processor(images=image, return_tensors="pt")
-        inputs = {key: value.to(self.device) for key, value in inputs.items()}
+        inputs = self.caption_processor(
+            text=self.caption_prompt,
+            images=image,
+            return_tensors="pt",
+        )
+        inputs = {
+            key: value.to(self.device, self.torch_dtype) if hasattr(value, "dtype") and value.dtype.is_floating_point else value.to(self.device)
+            for key, value in inputs.items()
+        }
         with torch.no_grad():
-            output = self.caption_model.generate(**inputs, max_new_tokens=30)
-        return self.caption_processor.decode(output[0], skip_special_tokens=True).strip()
+            output = self.caption_model.generate(
+                input_ids=inputs["input_ids"],
+                pixel_values=inputs["pixel_values"],
+                max_new_tokens=256,
+                do_sample=False,
+                num_beams=3,
+            )
+        generated_text = self.caption_processor.batch_decode(output, skip_special_tokens=False)[0]
+        parsed = self.caption_processor.post_process_generation(
+            generated_text,
+            task=self.caption_prompt,
+            image_size=(image.width, image.height),
+        )
+        caption = parsed.get(self.caption_prompt, "") if isinstance(parsed, dict) else ""
+        return str(caption).strip()
 
     def device_summary(self) -> str:
         if self.device != "cuda":
@@ -80,6 +105,41 @@ def _load_model(model_class: type[Any], model_name: str) -> Any:
     except ValueError as error:
         _raise_if_torch_too_old(error)
         raise
+
+
+def _load_florence_model(model_name: str, torch_dtype: torch.dtype) -> Any:
+    try:
+        return AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch_dtype,
+            trust_remote_code=True,
+            use_safetensors=True,
+        )
+    except OSError:
+        pass
+    except ValueError as error:
+        _raise_if_torch_too_old(error)
+        raise
+
+    try:
+        return AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch_dtype,
+            trust_remote_code=True,
+        )
+    except ValueError as error:
+        _raise_if_torch_too_old(error)
+        raise
+
+
+def _ensure_supported_transformers_version_for_florence() -> None:
+    version = transformers.__version__
+    major_minor = tuple(int(part) for part in version.split(".")[:2])
+    if major_minor < (4, 49) or major_minor >= (4, 50):
+        raise RuntimeError(
+            "현재 설치된 transformers 버전은 Florence-2와 호환되지 않습니다. "
+            f"현재 버전: {version}. `pip install \"transformers>=4.49,<4.50\"` 로 맞추세요."
+        )
 
 
 def _raise_if_torch_too_old(error: ValueError) -> None:

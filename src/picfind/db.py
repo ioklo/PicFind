@@ -66,11 +66,49 @@ def upsert_images(connection: sqlite3.Connection, records: Iterable[ImageRecord]
     return len(rows)
 
 
+def update_captions(connection: sqlite3.Connection, rows: Iterable[tuple[Path, str]]) -> int:
+    payload = [(caption, str(path)) for path, caption in rows]
+    if not payload:
+        return 0
+    connection.executemany(
+        """
+        UPDATE images
+        SET caption = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE path = ?
+        """,
+        payload,
+    )
+    connection.commit()
+    return len(payload)
+
+
+def clear_captions(connection: sqlite3.Connection) -> int:
+    cursor = connection.execute(
+        """
+        UPDATE images
+        SET caption = '', updated_at = CURRENT_TIMESTAMP
+        WHERE caption != ''
+        """
+    )
+    connection.commit()
+    return int(cursor.rowcount)
+
+
 def get_existing_file_state(connection: sqlite3.Connection, path: Path) -> sqlite3.Row | None:
     return connection.execute(
         "SELECT size_bytes, modified_time FROM images WHERE path = ?",
         (str(path),),
     ).fetchone()
+
+
+def iter_caption_targets(connection: sqlite3.Connection, skip_existing: bool) -> list[tuple[Path, str]]:
+    query = "SELECT path, caption FROM images"
+    params: tuple[object, ...] = ()
+    if skip_existing:
+        query += " WHERE caption = ''"
+    query += " ORDER BY path"
+    rows = connection.execute(query, params).fetchall()
+    return [(Path(row["path"]), row["caption"]) for row in rows]
 
 
 def load_search_matrix(connection: sqlite3.Connection) -> tuple[np.ndarray, list[tuple[Path, str]]]:
@@ -88,4 +126,11 @@ def load_search_matrix(connection: sqlite3.Connection) -> tuple[np.ndarray, list
 
 def count_images(connection: sqlite3.Connection) -> int:
     row = connection.execute("SELECT COUNT(*) AS count FROM images").fetchone()
+    return int(row["count"])
+
+
+def count_captioned_images(connection: sqlite3.Connection) -> int:
+    row = connection.execute(
+        "SELECT COUNT(*) AS count FROM images WHERE caption != ''"
+    ).fetchone()
     return int(row["count"])

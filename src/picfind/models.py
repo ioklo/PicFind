@@ -18,3 +18,11 @@ class SearchResult:
     path: Path
     caption: str
     score: float
+
+
+@dataclass(slots=True)
+class SearchResponse:
+    original_query: str
+    effective_query: str
+    embedding_mode: str
+    results: list[SearchResult]

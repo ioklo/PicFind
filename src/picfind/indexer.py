@@ -24,7 +24,7 @@ def discover_images(root: Path) -> Iterator[Path]:
 
 def index_directory(source: Path, settings: Settings) -> dict[str, int]:
     settings.ensure_parent_dirs()
-    models = ModelBundle(settings.clip_model, settings.caption_model)
+    models = ModelBundle(settings.clip_model, settings.caption_model, settings.caption_prompt)
     pending_records: list[ImageRecord] = []
     indexed = 0
     skipped = 0
